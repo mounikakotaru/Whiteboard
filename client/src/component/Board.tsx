@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
 import io from 'socket.io-client';
-import { useParams } from 'react-router-dom';
+import { useParams, useSearchParams } from 'react-router-dom';
 
 interface MyBoard {
   brushColor: string;
@@ -10,10 +10,13 @@ interface MyBoard {
 
 const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
   const { roomId } = useParams();
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [searchParams] = useSearchParams();
+  const username = searchParams.get('name') || 'Anonymous';
 
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [socket, setSocket] = useState<any>(null);
   const [userCount, setUserCount] = useState<number>(1);
+  const [userList, setUserList] = useState<string[]>([]);
   const [history, setHistory] = useState<string[]>([]);
   const [redoStack, setRedoStack] = useState<string[]>([]);
 
@@ -22,19 +25,18 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
     setSocket(newSocket);
 
     newSocket.on('connect', () => {
-      newSocket.emit('join-room', roomId);
+      newSocket.emit('join-room', { roomId, username });
       if (!isCreator) {
-        newSocket.emit('request-sync', roomId); // ask creator for canvas
+        newSocket.emit('request-sync', roomId);
       }
     });
 
     return () => newSocket.disconnect();
-  }, [roomId, isCreator]);
+  }, [roomId, username, isCreator]);
 
   useEffect(() => {
     if (!socket) return;
 
-    // Canvas image receiver
     socket.on('canvasImage', (data: string) => {
       const image = new Image();
       image.src = data;
@@ -48,7 +50,6 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
       };
     });
 
-    // Creator sends canvas on request
     if (isCreator) {
       socket.on('send-current-canvas', ({ to }) => {
         const canvas = canvasRef.current;
@@ -61,6 +62,10 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
 
     socket.on('user-count', (count: number) => {
       setUserCount(count);
+    });
+
+    socket.on('user-list', (list: string[]) => {
+      setUserList(list);
     });
   }, [socket, isCreator, roomId]);
 
@@ -83,7 +88,6 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
         ctx.lineWidth = brushSize;
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
-
         ctx.beginPath();
         ctx.moveTo(lastX, lastY);
         ctx.lineTo(e.offsetX, e.offsetY);
@@ -95,15 +99,12 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
     const endDrawing = () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-
       const dataURL = canvas.toDataURL();
       setHistory(prev => [...prev, dataURL]);
       setRedoStack([]);
-
       if (socket) {
         socket.emit('canvasImage', { roomId, data: dataURL });
       }
-
       isDrawing = false;
     };
 
@@ -132,7 +133,6 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
     const last = newHistory[newHistory.length - 1] || '';
     setHistory(newHistory);
     setRedoStack(prev => [...prev, canvasRef.current!.toDataURL()]);
-
     const img = new Image();
     img.src = last;
     img.onload = () => {
@@ -140,7 +140,6 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
       ctx?.clearRect(0, 0, canvasRef.current!.width, canvasRef.current!.height);
       ctx?.drawImage(img, 0, 0);
     };
-
     if (socket) socket.emit('canvasImage', { roomId, data: img.src });
   };
 
@@ -150,7 +149,6 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
     const restored = newRedoStack.pop()!;
     setRedoStack(newRedoStack);
     setHistory(prev => [...prev, restored]);
-
     const img = new Image();
     img.src = restored;
     img.onload = () => {
@@ -158,7 +156,6 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
       ctx?.clearRect(0, 0, canvasRef.current!.width, canvasRef.current!.height);
       ctx?.drawImage(img, 0, 0);
     };
-
     if (socket) socket.emit('canvasImage', { roomId, data: img.src });
   };
 
@@ -182,7 +179,6 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
     const handleWindowResize = () => {
       setWindowSize([window.innerWidth, window.innerHeight]);
     };
-
     window.addEventListener('resize', handleWindowResize);
     return () => {
       window.removeEventListener('resize', handleWindowResize);
@@ -190,30 +186,118 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
   }, []);
 
   return (
-    <div style={{ textAlign: 'center' }}>
-      {isCreator && (
-        <div style={{ marginBottom: '10px', fontWeight: 'bold', fontSize: '16px' }}>
-          👥 Users Connected: {userCount}
-        </div>
-      )}
-
-      <canvas
-        ref={canvasRef}
-        width={windowSize[0] > 600 ? 600 : 300}
-        height={windowSize[1] > 400 ? 400 : 200}
-        style={{ backgroundColor: 'white', border: '1px solid #ccc' }}
-      />
-
-      <div style={{
-        marginTop: '15px',
+    <div
+      style={{
         display: 'flex',
         justifyContent: 'center',
-        gap: '12px'
-      }}>
-        <button onClick={undo} style={buttonStyle('#3498db')}>⬅️ Undo</button>
-        <button onClick={redo} style={buttonStyle('#2ecc71')}>➡️ Redo</button>
-        <button onClick={clearCanvas} style={buttonStyle('#e74c3c')}>🧹 Clear</button>
+        alignItems: 'flex-start',
+        width: '100%',
+        height: 'calc(100vh - 80px)',
+        paddingTop: '20px',
+        position: 'relative',
+      }}
+    >
+      <div
+        style={{
+          textAlign: 'center',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '15px',
+        }}
+      >
+        <canvas
+          ref={canvasRef}
+          width={windowSize[0] > 600 ? 600 : 300}
+          height={windowSize[1] > 400 ? 400 : 200}
+          style={{ backgroundColor: 'white', border: '1px solid #ccc' }}
+        />
+
+        <div
+          className="tools"
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            gap: '12px',
+            backgroundColor: 'black',
+            padding: '10px 20px',
+            borderRadius: '8px',
+            width: 'fit-content',
+            color: 'white',
+          }}
+        >
+          <div>
+            <span>Color:</span>
+            <input
+              type="color"
+              value={brushColor}
+              onChange={(e) => setBrushColor(e.target.value)}
+              style={{ marginLeft: '5px' }}
+            />
+          </div>
+          <div>
+            <span style={{ marginLeft: '10px' }}>Size:</span>
+            <input
+              type="range"
+              min="1"
+              max="100"
+              value={brushSize}
+              onChange={(e) => setBrushSize(Number(e.target.value))}
+              style={{ margin: '0 8px' }}
+            />
+            <span>{brushSize}</span>
+          </div>
+        </div>
+
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            gap: '12px',
+          }}
+        >
+          <button onClick={undo} style={buttonStyle('#3498db')}>⬅️ Undo</button>
+          <button onClick={redo} style={buttonStyle('#2ecc71')}>➡️ Redo</button>
+          <button onClick={clearCanvas} style={buttonStyle('#e74c3c')}>🧹 Clear</button>
+        </div>
       </div>
+
+      {isCreator && (
+        <div
+          style={{
+            position: 'fixed',
+            top: '100px',
+            right: '40px',
+            width: '220px',
+            background: '#f4f4f4',
+            border: '1px solid #ccc',
+            borderRadius: '8px',
+            padding: '1rem',
+            zIndex: 10,
+            boxShadow: '0 0 8px rgba(0, 0, 0, 0.1)',
+          }}
+        >
+          <h3 style={{ marginTop: 0, fontSize: '1rem', textAlign: 'center' }}>
+            👥 Connected ({userCount})
+          </h3>
+          <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
+            {userList.map((name, index) => (
+              <li
+                key={index}
+                style={{
+                  padding: '5px 10px',
+                  backgroundColor: '#fff',
+                  marginBottom: '5px',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+              >
+                {name}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 };
@@ -230,3 +314,5 @@ const buttonStyle = (bgColor: string): React.CSSProperties => ({
 });
 
 export default Board;
+
+

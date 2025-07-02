@@ -23,14 +23,18 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
 
     newSocket.on('connect', () => {
       newSocket.emit('join-room', roomId);
+      if (!isCreator) {
+        newSocket.emit('request-sync', roomId); // ask creator for canvas
+      }
     });
 
     return () => newSocket.disconnect();
-  }, [roomId]);
+  }, [roomId, isCreator]);
 
   useEffect(() => {
     if (!socket) return;
 
+    // Canvas image receiver
     socket.on('canvasImage', (data: string) => {
       const image = new Image();
       image.src = data;
@@ -44,10 +48,21 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
       };
     });
 
+    // Creator sends canvas on request
+    if (isCreator) {
+      socket.on('send-current-canvas', ({ to }) => {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const dataURL = canvas.toDataURL();
+          socket.emit('canvasImage', { roomId, data: dataURL, to });
+        }
+      });
+    }
+
     socket.on('user-count', (count: number) => {
       setUserCount(count);
     });
-  }, [socket]);
+  }, [socket, isCreator, roomId]);
 
   useEffect(() => {
     let isDrawing = false;
@@ -176,7 +191,6 @@ const Board: React.FC<MyBoard> = ({ brushColor, brushSize, isCreator }) => {
 
   return (
     <div style={{ textAlign: 'center' }}>
-      {/* 👥 Only creator sees the count */}
       {isCreator && (
         <div style={{ marginBottom: '10px', fontWeight: 'bold', fontSize: '16px' }}>
           👥 Users Connected: {userCount}
@@ -216,5 +230,3 @@ const buttonStyle = (bgColor: string): React.CSSProperties => ({
 });
 
 export default Board;
-
-
